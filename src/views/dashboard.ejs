@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PowerChoice - Dashboard</title>
+    <link rel="stylesheet" href="/css/styles.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <header class="app-header">
+            <div class="header-logo">
+                <img src="/images/Logo-PowerChoice.png" alt="PowerChoice Logo">
+            </div>
+            <div class="header-user">
+                <span>Bienvenido, <%= user.username %></span>
+                <a href="/auth/logout" class="btn-outline">
+                    <i class="material-icons">logout</i>
+                    <span>Cerrar Sesión</span>
+                </a>
+            </div>
+        </header>
+
+        <main class="app-main">
+            <nav class="app-nav">
+                <div class="nav-section">
+                    <a href="#dashboard" class="nav-item active">
+                        <i class="material-icons">dashboard</i>
+                        <span>Dashboard</span>
+                    </a>
+                    <a href="#solar" class="nav-item">
+                        <i class="material-icons">wb_sunny</i>
+                        <span>Dimensionamiento Solar</span>
+                    </a>
+                    <a href="#battery" class="nav-item">
+                        <i class="material-icons">battery_charging_full</i>
+                        <span>Dimensionamiento Baterías</span>
+                    </a>
+                    <% if (user.role === 'admin') { %>
+                    <a href="#users" class="nav-item" id="createUserBtn">
+                        <i class="material-icons">people</i>
+                        <span>Gestión Usuarios</span>
+                    </a>
+                    <% } %>
+                </div>
+            </nav>
+
+            <div class="content-container">
+                <section id="dashboard" class="content-section">
+                    <div class="dashboard-grid">
+                        <div class="stat-card">
+                            <i class="material-icons">insert_drive_file</i>
+                            <h3>Archivos Disponibles</h3>
+                            <div class="stat-value" id="availableFiles">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <i class="material-icons">cloud_done</i>
+                            <h3>Archivos Descargados</h3>
+                            <div class="stat-value" id="downloadedFiles">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <i class="material-icons">pending</i>
+                            <h3>Pendientes</h3>
+                            <div class="stat-value" id="pendingFiles">0</div>
+                        </div>
+                    </div>
+
+                    <div class="download-card">
+                        <div class="card-header">
+                            <i class="material-icons">cloud_download</i>
+                            <h2>Descarga de Precios del Mercado Eléctrico</h2>
+                        </div>
+                        <div class="card-content">
+                            <div class="progress-container">
+                                <div class="progress-bar" id="downloadProgress" style="width: 0%"></div>
+                            </div>
+                            <button id="startDownload" class="btn-primary">
+                                <i class="material-icons">download</i>
+                                <span>Iniciar Descarga</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <% if (user.role === 'admin') { %>
+                    <div class="metrics-card">
+                        <div class="card-header">
+                            <i class="material-icons">analytics</i>
+                            <h2>Métricas del Sistema</h2>
+                        </div>
+                        <div class="card-content">
+                            <div id="metricsData"></div>
+                        </div>
+                    </div>
+                    <% } %>
+                </section>
+
+                <section id="solar" class="content-section pvgis-section">
+                    <div class="card-header">
+                        <i class="material-icons">wb_sunny</i>
+                        <h2>Dimensionamiento PV - Producción Solar Fotovoltaica</h2>
+                    </div>
+                    
+                    <div class="pvgis-container">
+                        <div class="map-container">
+                            <div id="map"></div>
+                        </div>
+                        
+                        <form id="pvgisForm" class="pvgis-form">
+                            <div class="form-groups">
+                                <div class="form-group">
+                                    <label for="latitude">
+                                        <i class="material-icons">location_on</i>
+                                        Latitud:
+                                    </label>
+                                    <input type="number" id="latitude" step="0.000001" required readonly>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label for="longitude">
+                                        <i class="material-icons">explore</i>
+                                        Longitud:
+                                    </label>
+                                    <input type="number" id="longitude" step="0.000001" required readonly>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label for="peakPower">
+                                        <i class="material-icons">power</i>
+                                        Potencia Pico (kWp):
+                                    </label>
+                                    <input type="number" id="peakPower" step="0.1" min="0" required>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label for="systemLoss">
+                                        <i class="material-icons">trending_down</i>
+                                        Pérdidas del Sistema (%):
+                                    </label>
+                                    <input type="number" id="systemLoss" min="0" max="100" required>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label for="mountingSystem">
+                                        <i class="material-icons">settings_system_daydream</i>
+                                        Sistema de Montaje:
+                                    </label>
+                                    <select id="mountingSystem" required>
+                                        <option value="fixed">Sistema Fijo</option>
+                                        <option value="vertical_axis">Seguimiento Eje Vertical</option>
+                                        <option value="inclined_axis">Seguimiento Eje Horizontal</option>
+                                        <option value="two_axis">Seguimiento 2 Ejes</option>
+                                    </select>
+                                </div>
+                                
+                                <div class="form-group" data-field="angle">
+                                    <label for="angle">
+                                        <i class="material-icons">rotate_right</i>
+                                        Ángulo de Inclinación (°):
+                                    </label>
+                                    <input type="number" id="angle" min="0" max="90" value="35" required>
+                                    <small>Para sistema fijo: ángulo respecto a la horizontal (0° = horizontal, 90° = vertical)</small>
+                                </div>
+                                
+                                <div class="form-group" data-field="aspect">
+                                    <label for="aspect">
+                                        <i class="material-icons">compass_calibration</i>
+                                        Orientación (Azimut) (°):
+                                    </label>
+                                    <input type="number" id="aspect" min="-180" max="180" value="0" required>
+                                    <small>0° = Sur, -90° = Este, 90° = Oeste, 180° = Norte</small>
+                                </div>
+                            </div>
+                            
+                            <button type="submit" class="btn-primary">
+                                <i class="material-icons">calculate</i>
+                                <span>Calcular Producción</span>
+                            </button>
+                        </form>
+                    </div>
+
+                    <div id="loadingMessage" style="display: none;" class="message loading"></div>
+                    <div id="errorMessage" style="display: none;" class="message error"></div>
+                </section>
+
+                <section id="battery" class="content-section battery-section">
+                    <div class="card-header">
+                        <i class="material-icons">battery_charging_full</i>
+                        <h2>Dimensionamiento de Baterías</h2>
+                    </div>
+                    
+                    <div class="battery-container">
+                        <form id="batteryForm" class="battery-form">
+                            <div class="form-groups">
+                                <!-- Selección de rango de fechas -->
+                                <div class="form-group">
+                                    <label for="startDate">
+                                        <i class="material-icons">event</i>
+                                        Fecha Inicio:
+                                    </label>
+                                    <input type="date" id="startDate" required>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label for="endDate">
+                                        <i class="material-icons">event</i>
+                                        Fecha Fin:
+                                    </label>
+                                    <input type="date" id="endDate" required>
+                                </div>
+
+                                <!-- Especificaciones de la batería -->
+                                <div class="form-group">
+                                    <label for="capacity">
+                                        <i class="material-icons">power</i>
+                                        Capacidad (MWh):
+                                    </label>
+                                    <input type="number" id="capacity" step="0.1" min="0" required>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="efficiency">
+                                        <i class="material-icons">speed</i>
+                                        Eficiencia (%):
+                                    </label>
+                                    <input type="number" id="efficiency" min="0" max="100" value="90" required>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="dod">
+                                        <i class="material-icons">battery_std</i>
+                                        Profundidad de Descarga (DoD) (%):
+                                    </label>
+                                    <input type="number" id="dod" min="0" max="100" value="80" required>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="cRate">
+                                        <i class="material-icons">speed</i>
+                                        C-Rate:
+                                    </label>
+                                    <input type="number" id="cRate" step="0.1" min="0" value="0.5" required>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="manufacturer">
+                                        <i class="material-icons">business</i>
+                                        Fabricante:
+                                    </label>
+                                    <select id="manufacturer" required>
+                                        <option value="tesla">Tesla</option>
+                                        <option value="catl">CATL</option>
+                                        <option value="byd">BYD</option>
+                                    </select>
+                                </div>
+                            </div>
+                            
+                            <div class="form-actions">
+                                <button type="submit" class="btn-primary">
+                                    <i class="material-icons">calculate</i>
+                                    <span>Calcular Optimización</span>
+                                </button>
+                                <button type="button" id="downloadAnalysis" class="btn-secondary" disabled>
+                                    <i class="material-icons">download</i>
+                                    <span>Descargar Análisis</span>
+                                </button>
+                            </div>
+                        </form>
+
+                    </div>
+
+                    <div id="batteryLoadingMessage" style="display: none;" class="message loading"></div>
+                    <div id="batteryErrorMessage" style="display: none;" class="message error"></div>
+
+                    <!-- Resultados del análisis -->
+                    <div id="batteryResults" class="battery-results" style="display: none;">
+                        <div class="results-grid">
+                            <div class="result-card">
+                                <i class="material-icons">wb_sunny</i>
+                                <h3>Ingresos Solo Solar</h3>
+                                <div class="result-value" id="solarOnlyRevenue">0 €</div>
+                            </div>
+                            <div class="result-card">
+                                <i class="material-icons">battery_charging_full</i>
+                                <h3>Ingresos Con Batería</h3>
+                                <div class="result-value" id="withBatteryRevenue">0 €</div>
+                            </div>
+                            <div class="result-card highlight">
+                                <i class="material-icons">trending_up</i>
+                                <h3>Mejora Económica</h3>
+                                <div class="result-value" id="revenueImprovement">0 €</div>
+                            </div>
+                        </div>
+
+                        <div class="degradation-section">
+                            <h3>Análisis de Degradación</h3>
+                            <div class="degradation-grid">
+                                <div class="degradation-card">
+                                    <i class="material-icons">battery_alert</i>
+                                    <h4>Degradación Total</h4>
+                                    <div class="degradation-value" id="totalDegradation">0%</div>
+                                </div>
+                                <div class="degradation-card">
+                                    <i class="material-icons">battery_std</i>
+                                    <h4>Por Ciclos</h4>
+                                    <div class="degradation-value" id="cyclesDegradation">0%</div>
+                                </div>
+                                <div class="degradation-card">
+                                    <i class="material-icons">access_time</i>
+                                    <h4>Natural (Tiempo)</h4>
+                                    <div class="degradation-value" id="naturalDegradation">0%</div>
+                                </div>
+                                <div class="degradation-card highlight">
+                                    <i class="material-icons">battery_full</i>
+                                    <h4>Capacidad Restante</h4>
+                                    <div class="degradation-value" id="remainingCapacity">100%</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <style>
+                    .battery-results {
+                        margin-top: 2rem;
+                        padding: 1rem;
+                        background: var(--card-bg);
+                        border-radius: 8px;
+                        box-shadow: var(--card-shadow);
+                    }
+
+                    .results-grid, .degradation-grid {
+                        display: grid;
+                        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                        gap: 1rem;
+                        margin-top: 1rem;
+                    }
+
+                    .result-card, .degradation-card {
+                        background: var(--bg-light);
+                        padding: 1.5rem;
+                        border-radius: 8px;
+                        text-align: center;
+                        transition: transform 0.2s;
+                    }
+
+                    .result-card:hover, .degradation-card:hover {
+                        transform: translateY(-5px);
+                    }
+
+                    .result-card.highlight, .degradation-card.highlight {
+                        background: var(--primary-color);
+                        color: white;
+                    }
+
+                    .result-card h3, .degradation-card h4 {
+                        margin: 0.5rem 0;
+                        font-size: 1.1rem;
+                    }
+
+                    .result-card .material-icons, .degradation-card .material-icons {
+                        font-size: 2rem;
+                        color: var(--primary-color);
+                    }
+
+                    .result-card.highlight .material-icons,
+                    .degradation-card.highlight .material-icons {
+                        color: white;
+                    }
+
+                    .result-value, .degradation-value {
+                        font-size: 1.5rem;
+                        font-weight: bold;
+                        margin-top: 0.5rem;
+                    }
+
+                    .degradation-section {
+                        margin-top: 2rem;
+                        padding-top: 2rem;
+                        border-top: 1px solid var(--border-color);
+                    }
+
+                    .degradation-section h3 {
+                        text-align: center;
+                        margin-bottom: 1rem;
+                    }
+                </style>
+            </div>
+        </main>
+
+        <!-- Sección de usuarios -->
+        <% if (user.role === 'admin') { %>
+        <section id="users" class="content-section">
+            <div class="card-header">
+                <i class="material-icons">people</i>
+                <h2>Gestión de Usuarios</h2>
+            </div>
+            
+            <div class="users-container">
+                <button id="createUserBtn" class="btn-primary">
+                    <i class="material-icons">person_add</i>
+                    <span>Crear Usuario</span>
+                </button>
+                
+                <div class="users-table-container">
+                    <table class="users-table">
+                        <thead>
+                            <tr>
+                                <th>Usuario</th>
+                                <th>Rol</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody id="usersTableBody">
+                            <!-- Los usuarios se cargarán dinámicamente -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Tabla de sesiones de usuarios -->
+                <div class="sessions-container">
+                    <h3>Historial de Sesiones</h3>
+                    <div class="sessions-table-container">
+                        <table class="sessions-table">
+                            <thead>
+                                <tr>
+                                    <th>Usuario</th>
+                                    <th>Inicio</th>
+                                    <th>Fin</th>
+                                    <th>Duración</th>
+                                    <th>Estado</th>
+                                </tr>
+                            </thead>
+                            <tbody id="sessionsTableBody">
+                                <!-- Las sesiones se cargarán dinámicamente -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <style>
+            .sessions-container {
+                margin-top: 2rem;
+                padding: 1rem;
+                background: var(--card-bg);
+                border-radius: 8px;
+                box-shadow: var(--card-shadow);
+            }
+
+            .sessions-container h3 {
+                margin-bottom: 1rem;
+                color: var(--text-color);
+            }
+
+            .sessions-table-container {
+                overflow-x: auto;
+            }
+
+            .sessions-table {
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 1rem;
+            }
+
+            .sessions-table th,
+            .sessions-table td {
+                padding: 1rem;
+                text-align: left;
+                border-bottom: 1px solid var(--border-color);
+            }
+
+            .sessions-table th {
+                background-color: var(--bg-light);
+                font-weight: bold;
+            }
+
+            .sessions-table tr:hover {
+                background-color: var(--bg-light);
+            }
+
+            .session-active {
+                color: var(--success-color);
+                font-weight: bold;
+            }
+
+            .session-ended {
+                color: var(--text-color);
+            }
+        </style>
+
+        <!-- Modal para crear usuario -->
+        <div id="createUserModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <i class="material-icons">person_add</i>
+                    <h2>Crear Nuevo Usuario</h2>
+                </div>
+                <form id="createUserForm">
+                    <div class="form-group">
+                        <label for="newUsername">
+                            <i class="material-icons">person</i>
+                            Usuario:
+                        </label>
+                        <input type="text" id="newUsername" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="newPassword">
+                            <i class="material-icons">lock</i>
+                            Contraseña:
+                        </label>
+                        <input type="password" id="newPassword" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="newRole">
+                            <i class="material-icons">admin_panel_settings</i>
+                            Rol:
+                        </label>
+                        <select id="newRole" required>
+                            <option value="user">Usuario</option>
+                            <option value="admin">Administrador</option>
+                        </select>
+                    </div>
+                    <div class="modal-actions">
+                        <button type="submit" class="btn-primary">
+                            <i class="material-icons">save</i>
+                            <span>Crear</span>
+                        </button>
+                        <button type="button" class="btn-secondary" onclick="closeCreateModal()">
+                            <i class="material-icons">close</i>
+                            <span>Cancelar</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Modal para editar usuario -->
+        <div id="editUserModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <i class="material-icons">edit</i>
+                    <h2>Editar Usuario</h2>
+                </div>
+                <form id="editUserForm">
+                    <input type="hidden" id="editUserId">
+                    <div class="form-group">
+                        <label for="editUsername">
+                            <i class="material-icons">person</i>
+                            Usuario:
+                        </label>
+                        <input type="text" id="editUsername" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="editPassword">
+                            <i class="material-icons">lock</i>
+                            Nueva Contraseña:
+                        </label>
+                        <input type="password" id="editPassword" placeholder="Dejar en blanco para mantener la actual">
+                    </div>
+                    <div class="form-group">
+                        <label for="editRole">
+                            <i class="material-icons">admin_panel_settings</i>
+                            Rol:
+                        </label>
+                        <select id="editRole" required>
+                            <option value="user">Usuario</option>
+                            <option value="admin">Administrador</option>
+                        </select>
+                    </div>
+                    <div class="modal-actions">
+                        <button type="submit" class="btn-primary">
+                            <i class="material-icons">save</i>
+                            <span>Guardar</span>
+                        </button>
+                        <button type="button" class="btn-secondary" onclick="closeEditModal()">
+                            <i class="material-icons">close</i>
+                            <span>Cancelar</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        <% } %>
+
+        <style>
+            .users-container {
+                padding: 1rem;
+                background: var(--card-bg);
+                border-radius: 8px;
+                box-shadow: var(--card-shadow);
+            }
+
+            .users-table-container {
+                margin-top: 1rem;
+                overflow-x: auto;
+            }
+
+            .users-table {
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 1rem;
+            }
+
+            .users-table th,
+            .users-table td {
+                padding: 1rem;
+                text-align: left;
+                border-bottom: 1px solid var(--border-color);
+            }
+
+            .users-table th {
+                background-color: var(--bg-light);
+                font-weight: bold;
+            }
+
+            .users-table tr:hover {
+                background-color: var(--bg-light);
+            }
+
+            .action-buttons {
+                display: flex;
+                gap: 0.5rem;
+            }
+
+            .action-buttons button {
+                padding: 0.5rem;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                gap: 0.25rem;
+            }
+
+            .edit-btn {
+                background-color: var(--primary-color);
+                color: white;
+            }
+
+            .delete-btn {
+                background-color: var(--error-color);
+                color: white;
+            }
+
+            .action-buttons button:hover {
+                opacity: 0.9;
+            }
+        </style>
+    </div>
+
+    <script src="/js/dashboard.js"></script>
+    <script src="/js/pvgis.js"></script>
+    <script src="/js/battery.js"></script>
+    <script src="/js/users.js"></script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+{
+  "name": "web_bees_4.0",
+  "version": "1.0.0",
+  "description": "Aplicación web para descarga de precios del mercado eléctrico",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "omie",
+    "energia",
+    "precios",
+    "mercado electrico"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.8.4",
+    "bcrypt": "^5.1.1",
+    "body-parser": "^1.20.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.1",
+    "ejs": "^3.1.9",
+    "express": "^4.18.2",
+    "express-session": "^1.17.3",
+    "leaflet": "^1.9.4",
+    "leaflet-control-geocoder": "^3.1.0",
+    "moment": "^2.30.1",
+    "nodemon": "^3.0.3",
+    "python-shell": "^5.0.0",
+    "sqlite3": "^5.1.7",
+    "xlsx": "^0.18.5"
+  }
+}

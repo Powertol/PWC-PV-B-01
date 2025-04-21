@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Environment variables
+.env
+
+# Database
+*.sqlite
+*.sqlite-journal
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+
+# Directory for downloaded files
+downloads/
+
+# IDE - VSCode
+.vscode/
+*.code-workspace
+
+# Misc
+.DS_Store
+Thumbs.db
+
+# Excel files
+*.xlsx
