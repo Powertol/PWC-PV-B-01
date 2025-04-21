@@ -2,7 +2,20 @@ const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcrypt');
 const path = require('path');
 
-const dbPath = path.resolve(__dirname, '../../database.sqlite');
+// En Render, usamos /var/data para almacenamiento persistente
+const dbPath = process.env.NODE_ENV === 'production'
+    ? path.join('/var/data', 'database.sqlite')
+    : path.resolve(__dirname, '../../database.sqlite');
+
+// Asegurarse de que el directorio existe en producción
+if (process.env.NODE_ENV === 'production') {
+    const fs = require('fs');
+    const dir = '/var/data';
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+    }
+}
+
 const db = new sqlite3.Database(dbPath);
 
 // Crear tablas
