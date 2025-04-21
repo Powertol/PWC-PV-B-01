@@ -36,29 +36,57 @@ const omieController = {
                     const parts = line.split(';');
                     if (parts.length >= 4) {
                         const fechaStr = parts[0];
-                        const hora = parseInt(parts[1]);
-                        const precioES = parseFloat(parts[2].replace(',', '.'));
+                        const horaStr = parts[1];
+                        const precioStr = parts[2].replace(',', '.');
                         
-                        if (!isNaN(hora) && !isNaN(precioES)) {
-                            const fecha = moment(fechaStr, 'DD/MM/YYYY');
-                            prices.push({
-                                ano: fecha.year(),
-                                mes: fecha.month() + 1,
-                                dia: fecha.date(),
-                                hora,
-                                precio: precioES
-                            });
+                        // Validar que los valores sean números válidos
+                        const hora = parseInt(horaStr);
+                        const precio = parseFloat(precioStr);
+                        
+                        if (!isNaN(hora) && !isNaN(precio) && fechaStr) {
+                            try {
+                                const fecha = moment(fechaStr, 'DD/MM/YYYY');
+                                if (fecha.isValid()) {
+                                    prices.push({
+                                        ano: fecha.year(),
+                                        mes: fecha.month() + 1,
+                                        dia: fecha.date(),
+                                        hora,
+                                        precio
+                                    });
+                                }
+                            } catch (error) {
+                                console.error('Error parsing date:', fechaStr, error);
+                            }
                         }
                     }
                 }
             }
 
+            console.log(`Processed ${prices.length} valid price records from file ${filename}`);
+
+            // Validar que todos los campos necesarios estén presentes y sean válidos
+            const validPrices = prices.filter(price => {
+                return (
+                    Number.isInteger(price.ano) && price.ano > 2000 && price.ano < 2100 &&
+                    Number.isInteger(price.mes) && price.mes >= 1 && price.mes <= 12 &&
+                    Number.isInteger(price.dia) && price.dia >= 1 && price.dia <= 31 &&
+                    Number.isInteger(price.hora) && price.hora >= 1 && price.hora <= 24 &&
+                    typeof price.precio === 'number' && !isNaN(price.precio)
+                );
+            });
+
+            console.log(`Found ${validPrices.length} valid prices after validation`);
+
             // Guardar precios en la base de datos
-            if (prices.length > 0) {
-                await energyService.saveEnergyPrices(prices);
+            if (validPrices.length > 0) {
+                await energyService.saveEnergyPrices(validPrices);
+                console.log(`Successfully saved ${validPrices.length} prices to database`);
+            } else {
+                console.warn('No valid prices found in file:', filename);
             }
 
-            return { success: true, filename };
+            return { success: true, filename, processedCount: validPrices.length };
         } catch (error) {
             console.error(`Error downloading file ${filename}:`, error);
             throw error;
@@ -113,14 +141,16 @@ const omieController = {
             );
             
             const pendingFiles = availableFiles.filter(date => !downloadedDates.has(date));
+            const results = [];
 
             // Iniciar descargas en secuencia
             for (const date of pendingFiles) {
                 try {
-                    await omieController.downloadFile(date);
+                    const result = await omieController.downloadFile(date);
+                    results.push(result);
                 } catch (error) {
                     console.error(`Error downloading file for date ${date}:`, error);
-                    continue;
+                    results.push({ date, error: error.message });
                 }
             }
 
