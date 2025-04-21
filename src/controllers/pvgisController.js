@@ -2,27 +2,17 @@ const axios = require('axios');
 const xlsx = require('xlsx');
 const path = require('path');
 const fs = require('fs').promises;
+const fileManager = require('../utils/fileManager');
 const generarSistema = require('../scripts/generarSistema');
-
-// En Render, usar el directorio /tmp para archivos temporales
-const BASE_DIR = process.env.NODE_ENV === 'production' ? '/tmp' : path.join(__dirname, '..', '..');
-const DOWNLOADS_DIR = path.join(BASE_DIR, 'downloads');
-
-// Asegurar que el directorio de descargas existe
-async function ensureDirectoryExists() {
-    try {
-        await fs.mkdir(DOWNLOADS_DIR, { recursive: true });
-        console.log('Directorio de descargas creado:', DOWNLOADS_DIR);
-    } catch (error) {
-        console.error('Error al crear directorio:', error);
-        throw error;
-    }
-}
 
 const pvgisController = {
     async getPVGISData(req, res) {
         try {
-            await ensureDirectoryExists();
+            // Asegurar que todos los directorios y archivos necesarios existen
+            await fileManager.ensureDirectories();
+            await fileManager.ensurePreciosFile();
+            await fileManager.ensureSistemaFile();
+
             console.log('Datos recibidos:', req.body);
             
             const {
@@ -35,7 +25,7 @@ const pvgisController = {
                 aspect
             } = req.body;
 
-            // Validaciones...
+            // Validaciones
             if (!lat || !lon || !peakpower || loss === undefined || !angle) {
                 throw new Error('Faltan campos requeridos o valores inválidos');
             }
@@ -50,22 +40,13 @@ const pvgisController = {
             let trackingParams = {};
             switch(mounting_system) {
                 case 'vertical_axis':
-                    trackingParams = {
-                        tracking: 1,
-                        trackingtype: 0
-                    };
+                    trackingParams = { tracking: 1, trackingtype: 0 };
                     break;
                 case 'inclined_axis':
-                    trackingParams = {
-                        tracking: 1,
-                        trackingtype: 1
-                    };
+                    trackingParams = { tracking: 1, trackingtype: 1 };
                     break;
                 case 'two_axis':
-                    trackingParams = {
-                        tracking: 1,
-                        trackingtype: 2
-                    };
+                    trackingParams = { tracking: 1, trackingtype: 2 };
                     break;
                 default:
                     trackingParams = {
@@ -115,7 +96,7 @@ const pvgisController = {
                     if (!timeMatch) {
                         throw new Error(`Formato de fecha inválido: ${hour.time}`);
                     }
-                    const [_, year, month, day, hours, minutes] = timeMatch;
+                    const [_, year, month, day, hours] = timeMatch;
                     
                     return {
                         año: parseInt(year),
@@ -129,76 +110,76 @@ const pvgisController = {
                 throw new Error('No se encontraron datos horarios en la respuesta de PVGIS');
             }
 
+            // Crear Excel con resultados
+            const wb = xlsx.utils.book_new();
+            
+            // Agregar información de la instalación
+            const infoData = [
+                ['INSTALACIÓN SOLAR FOTOVOLTAICA - DATOS DE CONFIGURACIÓN'],
+                [''],
+                ['Ubicación', `Latitud: ${params.lat}°, Longitud: ${params.lon}°`],
+                ['Potencia Instalada', `${params.peakpower} kWp`],
+                ['Pérdidas', `${params.loss}%`],
+                ['Configuración', mounting_system === 'fixed' ? 'Sistema Fijo' :
+                                mounting_system === 'vertical_axis' ? 'Seguimiento Eje Vertical' :
+                                mounting_system === 'inclined_axis' ? 'Seguimiento Eje Horizontal' :
+                                'Seguimiento 2 Ejes'],
+                mounting_system === 'fixed' ? ['Ángulo', `${params.fixed_angle}°`] : [''],
+                mounting_system === 'fixed' ? ['Azimut', `${params.fixed_azimuth}° (0° = Sur, -90° = Este, 90° = Oeste)`] : [''],
+                [''],
+                ['Fuente de Datos', 'PVGIS-SARAH2'],
+                ['Año de Referencia', '2020']
+            ];
+            
+            const wsInfo = xlsx.utils.aoa_to_sheet(infoData);
+            wsInfo['!cols'] = [{ wch: 25 }, { wch: 15 }, { wch: 10 }];
+            
+            const wsData = xlsx.utils.json_to_sheet(hourlyData);
+            wsData['!cols'] = [
+                { wch: 6 },  // año
+                { wch: 4 },  // mes
+                { wch: 4 },  // día
+                { wch: 4 },  // hora
+                { wch: 15 }  // produccion_MWh
+            ];
+
+            xlsx.utils.sheet_add_aoa(wsData, [
+                ['Año', 'Mes', 'Día', 'Hora', 'Producción (MWh)']
+            ], { origin: 'A1' });
+            
+            xlsx.utils.book_append_sheet(wb, wsInfo, 'Información');
+            xlsx.utils.book_append_sheet(wb, wsData, 'Datos Horarios');
+            
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const fileName = `pvgis_production_${timestamp}.xlsx`;
+            const excelPath = path.join(fileManager.paths.DOWNLOADS_DIR, fileName);
+            
+            // Guardar Excel
+            xlsx.writeFile(wb, excelPath);
+            console.log('Archivo Excel generado en:', excelPath);
+
+            // Actualizar sistema.xlsx
+            console.log('Actualizando sistema.xlsx...');
             try {
-                const wb = xlsx.utils.book_new();
-                
-                const infoData = [
-                    ['INSTALACIÓN SOLAR FOTOVOLTAICA - DATOS DE CONFIGURACIÓN'],
-                    [''],
-                    ['Ubicación', `Latitud: ${params.lat}°, Longitud: ${params.lon}°`],
-                    ['Potencia Instalada', `${params.peakpower} kWp`],
-                    ['Pérdidas', `${params.loss}%`],
-                    ['Configuración', mounting_system === 'fixed' ? 'Sistema Fijo' :
-                                    mounting_system === 'vertical_axis' ? 'Seguimiento Eje Vertical' :
-                                    mounting_system === 'inclined_axis' ? 'Seguimiento Eje Horizontal' :
-                                    'Seguimiento 2 Ejes'],
-                    mounting_system === 'fixed' ? ['Ángulo', `${params.fixed_angle}°`] : [''],
-                    mounting_system === 'fixed' ? ['Azimut', `${params.fixed_azimuth}° (0° = Sur, -90° = Este, 90° = Oeste)`] : [''],
-                    [''],
-                    ['Fuente de Datos', 'PVGIS-SARAH2'],
-                    ['Año de Referencia', '2020']
-                ];
-                
-                const wsInfo = xlsx.utils.aoa_to_sheet(infoData);
-                wsInfo['!cols'] = [{ wch: 25 }, { wch: 15 }, { wch: 10 }];
-                
-                const wsData = xlsx.utils.json_to_sheet(hourlyData);
-                wsData['!cols'] = [
-                    { wch: 6 },
-                    { wch: 4 },
-                    { wch: 4 },
-                    { wch: 4 },
-                    { wch: 15 }
-                ];
-
-                xlsx.utils.sheet_add_aoa(wsData, [
-                    ['Año', 'Mes', 'Día', 'Hora', 'Producción (MWh)']
-                ], { origin: 'A1' });
-                
-                xlsx.utils.book_append_sheet(wb, wsInfo, 'Información');
-                xlsx.utils.book_append_sheet(wb, wsData, 'Datos Horarios');
-                
-                const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-                const fileName = `pvgis_production_${timestamp}.xlsx`;
-                const excelPath = path.join(DOWNLOADS_DIR, fileName);
-                
-                xlsx.writeFile(wb, excelPath);
-
-                console.log('Actualizando sistema.xlsx con los nuevos datos de producción...');
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                
-                const sistemaActualizado = await generarSistema();
-                
-                if (!sistemaActualizado) {
-                    throw new Error('Error al actualizar sistema.xlsx');
-                }
-                
-                res.json({
-                    success: true,
-                    message: 'Datos procesados correctamente',
-                    data: {
-                        summary: {
-                            totalProduction: hourlyData.reduce((sum, hour) => sum + hour['Producción (MWh)'], 0),
-                            location: `${params.lat}, ${params.lon}`,
-                            peakPower: params.peakpower
-                        }
-                    },
-                    file: fileName
-                });
+                await generarSistema();
+                console.log('sistema.xlsx actualizado correctamente');
             } catch (error) {
-                console.error('Error al crear archivo Excel:', error);
-                throw new Error(`Error al generar el archivo Excel: ${error.message}`);
+                console.error('Error al actualizar sistema.xlsx:', error);
+                // No lanzar el error para que no afecte la respuesta al usuario
             }
+            
+            res.json({
+                success: true,
+                message: 'Datos procesados correctamente',
+                data: {
+                    summary: {
+                        totalProduction: hourlyData.reduce((sum, hour) => sum + hour['Producción (MWh)'], 0),
+                        location: `${params.lat}, ${params.lon}`,
+                        peakPower: params.peakpower
+                    }
+                },
+                file: fileName
+            });
 
         } catch (error) {
             console.error('Error en PVGIS:', error);

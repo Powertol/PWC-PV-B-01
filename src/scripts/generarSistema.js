@@ -1,32 +1,23 @@
 const XLSX = require('xlsx');
-const path = require('path');
 const fs = require('fs').promises;
-const fsSync = require('fs');
-
-// En Render, usar el directorio /tmp para archivos temporales
-const BASE_DIR = process.env.NODE_ENV === 'production' ? '/tmp' : path.join(__dirname, '..', '..');
-const DOWNLOADS_DIR = path.join(BASE_DIR, 'downloads');
-const SISTEMA_PATH = path.join(BASE_DIR, 'sistema.xlsx');
-
-// Asegurar que los directorios existen
-async function ensureDirectoryExists() {
-    try {
-        await fs.mkdir(DOWNLOADS_DIR, { recursive: true });
-        console.log('Directorio de descargas creado:', DOWNLOADS_DIR);
-    } catch (error) {
-        console.error('Error al crear directorio:', error);
-        throw error;
-    }
-}
+const fileManager = require('../utils/fileManager');
 
 async function generarSistema() {
     try {
-        await ensureDirectoryExists();
-        
-        console.log('Iniciando generación del archivo sistema.xlsx...');
-        const precios = await leerPreciosAgregados();
-        const produccionPorHora = await leerProduccionPVGIS();
+        // Asegurar que todos los directorios y archivos necesarios existen
+        await fileManager.ensureDirectories();
+        await fileManager.ensurePreciosFile();
+        await fileManager.ensureSistemaFile();
 
+        console.log('Iniciando generación del archivo sistema.xlsx...');
+        
+        const precios = await leerPreciosAgregados();
+        if (!precios.length) {
+            console.log('No hay datos de precios disponibles');
+            return true; // No es un error, simplemente no hay datos aún
+        }
+
+        const produccionPorHora = await leerProduccionPVGIS();
         console.log('Registros de precios originales:', precios.length);
         
         // Verificar si hay horas inválidas antes del filtrado
@@ -91,8 +82,8 @@ async function generarSistema() {
         XLSX.utils.book_append_sheet(newWorkbook, newWorksheet, "Sistema");
 
         // Guardar archivo
-        XLSX.writeFile(newWorkbook, SISTEMA_PATH);
-        console.log('Archivo sistema.xlsx generado exitosamente en:', SISTEMA_PATH);
+        XLSX.writeFile(newWorkbook, fileManager.paths.SISTEMA_PATH);
+        console.log('Archivo sistema.xlsx generado exitosamente en:', fileManager.paths.SISTEMA_PATH);
         return true;
     } catch (error) {
         console.error('Error al generar el archivo:', error);
@@ -100,13 +91,11 @@ async function generarSistema() {
     }
 }
 
-// Función para leer el archivo de precios
 async function leerPreciosAgregados() {
     try {
-        const rutaPrecios = path.join(DOWNLOADS_DIR, 'precios_agregados.xlsx');
-        console.log('Leyendo precios desde:', rutaPrecios);
+        console.log('Leyendo precios desde:', fileManager.paths.PRECIOS_PATH);
         
-        const workbook = XLSX.readFile(rutaPrecios);
+        const workbook = XLSX.readFile(fileManager.paths.PRECIOS_PATH);
         const worksheet = workbook.Sheets[workbook.SheetNames[0]];
         const datos = XLSX.utils.sheet_to_json(worksheet, { raw: true });
         
@@ -123,41 +112,40 @@ async function leerPreciosAgregados() {
         }));
     } catch (error) {
         console.error('Error al leer archivo de precios:', error);
-        throw error;
+        return [];
     }
 }
 
-// Función para leer el archivo de producción PVGIS más reciente
 async function leerProduccionPVGIS() {
     try {
-        const archivos = await fs.readdir(DOWNLOADS_DIR);
-        const archivosPvgis = archivos.filter(archivo => archivo.startsWith('pvgis_production_'));
+        const files = await fs.readdir(fileManager.paths.DOWNLOADS_DIR);
+        const archivosPvgis = files.filter(archivo => archivo.startsWith('pvgis_production_'));
         
+        if (!archivosPvgis.length) {
+            console.log('No hay archivos de producción PVGIS');
+            return new Map();
+        }
+
         // Obtener el archivo más reciente
         const archivoProduccion = archivosPvgis.sort().pop();
 
         // Eliminar archivos antiguos
         const archivosEliminados = archivosPvgis.slice(0, -1);
         await Promise.all(archivosEliminados.map(archivo => 
-            fs.unlink(path.join(DOWNLOADS_DIR, archivo))
+            fs.unlink(path.join(fileManager.paths.DOWNLOADS_DIR, archivo))
         ));
         
         if (archivosEliminados.length > 0) {
             console.log(`Se eliminaron ${archivosEliminados.length} archivos antiguos de producción`);
         }
 
-        if (!archivoProduccion) {
-            throw new Error('No se encontró archivo de producción PVGIS');
-        }
-
-        console.log('Usando archivo de producción:', archivoProduccion);
-        const rutaProduccion = path.join(DOWNLOADS_DIR, archivoProduccion);
-        
+        const rutaProduccion = path.join(fileManager.paths.DOWNLOADS_DIR, archivoProduccion);
         const workbook = XLSX.readFile(rutaProduccion);
         const worksheet = workbook.Sheets['Datos Horarios'];
         
         if (!worksheet) {
-            throw new Error('No se encontró la hoja "Datos Horarios"');
+            console.log('No se encontró la hoja "Datos Horarios"');
+            return new Map();
         }
 
         const datos = XLSX.utils.sheet_to_json(worksheet, { raw: true });
@@ -188,7 +176,7 @@ async function leerProduccionPVGIS() {
         return produccionPorFecha;
     } catch (error) {
         console.error('Error al leer archivo de producción:', error);
-        throw error;
+        return new Map();
     }
 }
 
@@ -197,6 +185,7 @@ function formatearNumero(numero, decimales = 2) {
     return parseFloat(numero.toFixed(decimales));
 }
 
+// Si el script se ejecuta directamente
 if (require.main === module) {
     generarSistema();
 }
