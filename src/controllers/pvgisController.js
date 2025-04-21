@@ -1,18 +1,10 @@
 const axios = require('axios');
 const xlsx = require('xlsx');
-const path = require('path');
-const fs = require('fs').promises;
-const fileManager = require('../utils/fileManager');
-const generarSistema = require('../scripts/generarSistema');
+const energyService = require('../services/energyService');
 
 const pvgisController = {
     async getPVGISData(req, res) {
         try {
-            // Asegurar que todos los directorios y archivos necesarios existen
-            await fileManager.ensureDirectories();
-            await fileManager.ensurePreciosFile();
-            await fileManager.ensureSistemaFile();
-
             console.log('Datos recibidos:', req.body);
             
             const {
@@ -110,7 +102,20 @@ const pvgisController = {
                 throw new Error('No se encontraron datos horarios en la respuesta de PVGIS');
             }
 
-            // Crear Excel con resultados
+            // Guardar datos en la base de datos
+            const systemConfig = {
+                latitude: parseFloat(lat),
+                longitude: parseFloat(lon),
+                peakPower: parseFloat(peakpower),
+                systemLoss: parseFloat(loss),
+                mountingSystem: mounting_system,
+                angle: parseFloat(angle),
+                azimuth: parseFloat(aspect)
+            };
+
+            await energyService.saveSolarProduction(hourlyData, systemConfig);
+
+            // Generar Excel para descargar
             const wb = xlsx.utils.book_new();
             
             // Agregar información de la instalación
@@ -150,36 +155,15 @@ const pvgisController = {
             xlsx.utils.book_append_sheet(wb, wsInfo, 'Información');
             xlsx.utils.book_append_sheet(wb, wsData, 'Datos Horarios');
             
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-            const fileName = `pvgis_production_${timestamp}.xlsx`;
-            const excelPath = path.join(fileManager.paths.DOWNLOADS_DIR, fileName);
+            // Generar el archivo Excel en memoria
+            const excelBuffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
             
-            // Guardar Excel
-            xlsx.writeFile(wb, excelPath);
-            console.log('Archivo Excel generado en:', excelPath);
-
-            // Actualizar sistema.xlsx
-            console.log('Actualizando sistema.xlsx...');
-            try {
-                await generarSistema();
-                console.log('sistema.xlsx actualizado correctamente');
-            } catch (error) {
-                console.error('Error al actualizar sistema.xlsx:', error);
-                // No lanzar el error para que no afecte la respuesta al usuario
-            }
+            // Configurar headers para la descarga
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            res.setHeader('Content-Disposition', 'attachment; filename=pvgis_production.xlsx');
             
-            res.json({
-                success: true,
-                message: 'Datos procesados correctamente',
-                data: {
-                    summary: {
-                        totalProduction: hourlyData.reduce((sum, hour) => sum + hour['Producción (MWh)'], 0),
-                        location: `${params.lat}, ${params.lon}`,
-                        peakPower: params.peakpower
-                    }
-                },
-                file: fileName
-            });
+            // Enviar el archivo
+            res.send(excelBuffer);
 
         } catch (error) {
             console.error('Error en PVGIS:', error);

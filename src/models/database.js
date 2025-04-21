@@ -50,6 +50,58 @@ async function initializeTables() {
             )
         `);
 
+        // Tabla de precios de energía
+        await db.none(`
+            CREATE TABLE IF NOT EXISTS energy_prices (
+                id SERIAL PRIMARY KEY,
+                year INTEGER,
+                month INTEGER,
+                day INTEGER,
+                hour INTEGER,
+                price_mwh DECIMAL(10, 2),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(year, month, day, hour)
+            )
+        `);
+
+        // Tabla de producción solar
+        await db.none(`
+            CREATE TABLE IF NOT EXISTS solar_production (
+                id SERIAL PRIMARY KEY,
+                year INTEGER,
+                month INTEGER,
+                day INTEGER,
+                hour INTEGER,
+                production_mwh DECIMAL(10, 6),
+                latitude DECIMAL(9, 6),
+                longitude DECIMAL(9, 6),
+                peak_power DECIMAL(10, 2),
+                system_loss DECIMAL(5, 2),
+                mounting_system TEXT,
+                angle DECIMAL(5, 2),
+                azimuth DECIMAL(5, 2),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(year, month, day, hour, latitude, longitude)
+            )
+        `);
+
+        // Tabla de configuración de instalaciones
+        await db.none(`
+            CREATE TABLE IF NOT EXISTS installations (
+                id SERIAL PRIMARY KEY,
+                name TEXT,
+                latitude DECIMAL(9, 6),
+                longitude DECIMAL(9, 6),
+                peak_power DECIMAL(10, 2),
+                system_loss DECIMAL(5, 2),
+                mounting_system TEXT,
+                angle DECIMAL(5, 2),
+                azimuth DECIMAL(5, 2),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                user_id INTEGER REFERENCES users(id)
+            )
+        `);
+
         // Crear superadmin si no existe
         const admin = await db.oneOrNone('SELECT id FROM users WHERE username = $1', ['admin']);
         if (!admin) {
