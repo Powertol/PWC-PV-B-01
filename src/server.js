@@ -1,5 +1,6 @@
 const express = require('express');
 const session = require('express-session');
+const pgSession = require('connect-pg-simple')(session);
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const path = require('path');
@@ -21,12 +22,29 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, '../public')));
 app.use('/downloads', express.static(path.join(__dirname, '../downloads')));
-app.use(session({
-    secret: 'powerchoice_secret_key',
+
+// Configuración de sesión con PostgreSQL
+const sessionConfig = {
+    store: new pgSession({
+        conString: process.env.DATABASE_URL,
+        createTableIfMissing: true,
+        pruneSessionInterval: 60
+    }),
+    secret: process.env.SESSION_SECRET || 'bees_session_secret_2025',
     resave: false,
     saveUninitialized: false,
-    cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 } // 24 horas
-}));
+    cookie: {
+        secure: process.env.NODE_ENV === 'production',
+        httpOnly: true,
+        maxAge: 24 * 60 * 60 * 1000 // 24 horas
+    }
+};
+
+if (app.get('env') === 'production') {
+    app.set('trust proxy', 1); // Confiar en el proxy de Render
+}
+
+app.use(session(sessionConfig));
 
 // Base de datos
 require('./models/database');
@@ -63,40 +81,10 @@ app.use('/omie', authMiddleware, omieRoutes);
 app.use('/conversor', authMiddleware, conversorRoutes);
 
 // Rutas de PVGIS
-console.log('Registrando rutas de PVGIS...');
 app.use('/pvgis', authMiddleware, pvgisRoutes);
 
 // Rutas de batería
-console.log('Registrando rutas de batería...');
 app.use('/api/battery', authMiddleware, batteryRoutes);
-
-// Ruta temporal para pruebas sin autenticación
-app.post('/optimize-test', express.json(), async (req, res) => {
-    const BatteryController = require('./controllers/batteryController');
-    await BatteryController.optimize(req, res);
-});
-
-// Ruta temporal para pruebas
-app.post('/api/analyze-battery', express.json(), async (req, res) => {
-    const BatteryController = require('./controllers/batteryController');
-    await BatteryController.runAnalysis(req, res);
-});
-
-// Ruta temporal para pruebas de lectura de Excel
-app.get('/read-excel', express.json(), async (req, res) => {
-    const { readExcelFile } = require('./utils/excelReader');
-    const { filename } = req.query;
-    if (!filename) {
-        return res.status(400).json({
-            success: false,
-            error: 'Nombre de archivo requerido'
-        });
-    }
-
-    const filePath = path.join(__dirname, '..', filename);
-    const result = readExcelFile(filePath);
-    res.json(result);
-});
 
 // Rutas de vistas
 app.get('/', (req, res) => {
@@ -118,12 +106,21 @@ app.get('/dashboard', authMiddleware, (req, res) => {
 // Manejo de errores
 app.use((err, req, res, next) => {
     console.error(err.stack);
-    res.status(500).send('¡Algo salió mal!');
+    if (process.env.NODE_ENV === 'production') {
+        res.status(500).json({
+            error: 'Error interno del servidor'
+        });
+    } else {
+        res.status(500).json({
+            error: err.message,
+            stack: err.stack
+        });
+    }
 });
 
 // Iniciar servidor
 app.listen(port, () => {
-    console.log(`Servidor ejecutándose en http://localhost:${port}`);
+    console.log(`Servidor ejecutándose en puerto ${port}`);
 });
 
 module.exports = app;
