@@ -29,8 +29,9 @@
     "leaflet-control-geocoder": "^3.1.0",
     "moment": "^2.30.1",
     "nodemon": "^3.0.3",
+    "pg": "^8.14.1",
+    "pg-promise": "^11.13.0",
     "python-shell": "^5.0.0",
-    "sqlite3": "^5.1.7",
     "xlsx": "^0.18.5"
   }
 }
