@@ -6,22 +6,25 @@ const fs = require('fs');
 const path = require('path');
 const XLSX = require('xlsx');
 
-const DOWNLOAD_DIR = path.join(__dirname, '..', '..', 'downloads', 'omie');
-const EXCEL_DIR = path.join(__dirname, '..', '..', 'downloads', 'omie_excel');
-const AGREGADO_PATH = path.join(__dirname, '..', '..', 'downloads', 'precios_agregados.xlsx');
+// En Render, usar el directorio /tmp para archivos temporales
+const BASE_DIR = process.env.NODE_ENV === 'production' ? '/tmp' : path.join(__dirname, '..', '..');
+const DOWNLOAD_DIR = path.join(BASE_DIR, 'downloads', 'omie');
+const EXCEL_DIR = path.join(BASE_DIR, 'downloads', 'omie_excel');
+const AGREGADO_PATH = path.join(BASE_DIR, 'downloads', 'precios_agregados.xlsx');
 
 // Asegurar que los directorios existen
-if (!fs.existsSync(DOWNLOAD_DIR)) {
-    fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
-}
-if (!fs.existsSync(EXCEL_DIR)) {
-    fs.mkdirSync(EXCEL_DIR, { recursive: true });
+function ensureDirectoriesExist() {
+    [DOWNLOAD_DIR, EXCEL_DIR, path.dirname(AGREGADO_PATH)].forEach(dir => {
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+    });
 }
 
 const omieController = {
     getFilesList: async function() {
-        const startDate = moment('2024-01-01'); // Comenzar desde enero de 2024
-        const endDate = moment().add(1, 'day'); // Un día después de hoy
+        const startDate = moment('2024-01-01');
+        const endDate = moment().add(1, 'day');
         const datesList = [];
 
         while (startDate.isSameOrBefore(endDate)) {
@@ -33,6 +36,8 @@ const omieController = {
     },
 
     checkDownloadedFiles: async function() {
+        ensureDirectoriesExist();
+        
         // Verificar archivos físicamente en el directorio
         const existingFiles = fs.existsSync(DOWNLOAD_DIR)
             ? fs.readdirSync(DOWNLOAD_DIR)
@@ -40,42 +45,27 @@ const omieController = {
             : [];
 
         // Limpiar registros de la base de datos que ya no existen físicamente
-        await new Promise((resolve, reject) => {
-            db.run('DELETE FROM downloaded_files WHERE filename NOT IN (' +
-                existingFiles.map(() => '?').join(',') + ')',
-                existingFiles,
-                (err) => {
-                    if (err) reject(err);
-                    resolve();
-                }
-            );
-        });
+        await db.none(
+            'DELETE FROM downloaded_files WHERE filename NOT IN ($1:csv)',
+            [existingFiles]
+        );
 
         // Insertar nuevos archivos encontrados
         for (const file of existingFiles) {
             const date = file.replace('marginalpdbc_', '').replace('.1', '');
-            await new Promise((resolve, reject) => {
-                db.run(
-                    'INSERT OR IGNORE INTO downloaded_files (filename, file_date, file_path) VALUES (?, ?, ?)',
-                    [file, moment(date, 'YYYYMMDD').format('YYYY-MM-DD'), path.join(DOWNLOAD_DIR, file)],
-                    (err) => {
-                        if (err) reject(err);
-                        resolve();
-                    }
-                );
-            });
+            await db.none(
+                'INSERT INTO downloaded_files (filename, file_date, file_path) VALUES ($1, $2, $3) ON CONFLICT (filename) DO NOTHING',
+                [file, moment(date, 'YYYYMMDD').format('YYYY-MM-DD'), path.join(DOWNLOAD_DIR, file)]
+            );
         }
 
         // Retornar la lista actualizada de archivos
-        return new Promise((resolve, reject) => {
-            db.all('SELECT filename, file_date FROM downloaded_files ORDER BY file_date', (err, files) => {
-                if (err) reject(err);
-                resolve(files);
-            });
-        });
+        return await db.any('SELECT filename, file_date FROM downloaded_files ORDER BY file_date');
     },
 
     downloadFile: async function(date) {
+        ensureDirectoriesExist();
+        
         const filename = `marginalpdbc_${date}.1`;
         const filePath = path.join(DOWNLOAD_DIR, filename);
 
@@ -98,16 +88,12 @@ const omieController = {
             await procesarArchivo(filename);
 
             // Registrar en la base de datos
-            return new Promise((resolve, reject) => {
-                db.run(
-                    'INSERT INTO downloaded_files (filename, file_date, file_path) VALUES (?, ?, ?)',
-                    [filename, moment(date, 'YYYYMMDD').format('YYYY-MM-DD'), filePath],
-                    (err) => {
-                        if (err) reject(err);
-                        resolve({ success: true, filename, filePath });
-                    }
-                );
-            });
+            await db.none(
+                'INSERT INTO downloaded_files (filename, file_date, file_path) VALUES ($1, $2, $3)',
+                [filename, moment(date, 'YYYYMMDD').format('YYYY-MM-DD'), filePath]
+            );
+
+            return { success: true, filename, filePath };
         } catch (error) {
             console.error(`Error downloading file ${filename}:`, error.message);
             throw error;
@@ -116,6 +102,8 @@ const omieController = {
 
     getDownloadStatus: async function(req, res) {
         try {
+            ensureDirectoriesExist();
+            
             // Forzar una verificación fresca de archivos descargados
             await omieController.checkDownloadedFiles();
             
@@ -133,18 +121,10 @@ const omieController = {
             // Usar los archivos físicos como lista de descargados
             const downloadedFilenames = existingFiles;
             
-            // Calcular archivos pendientes comparando nombres de archivo completos
+            // Calcular archivos pendientes
             const pendingFiles = availableFilenames.filter(filename =>
                 !downloadedFilenames.includes(filename)
             );
-
-            // Logging para debug
-            console.log('Estado actual de descargas:', {
-                disponibles: availableFilenames.length,
-                descargados: downloadedFilenames.length,
-                pendientes: pendingFiles.length,
-                directorioDescarga: DOWNLOAD_DIR
-            });
 
             res.json({
                 available: availableFilenames.length,
@@ -168,7 +148,9 @@ const omieController = {
 
     startDownload: async function(req, res) {
         try {
-            await omieController.checkDownloadedFiles(); // Sincronizar archivos físicos con BD
+            ensureDirectoriesExist();
+            
+            await omieController.checkDownloadedFiles();
             const availableFiles = await omieController.getFilesList();
             const downloadedFiles = await omieController.checkDownloadedFiles();
             const downloadedFilenames = downloadedFiles.map(f => f.filename);
@@ -178,8 +160,10 @@ const omieController = {
             );
 
             if (req.session.user) {
-                db.run('INSERT INTO metrics (user_id, action) VALUES (?, ?)',
-                    [req.session.user.id, 'start_download']);
+                await db.none(
+                    'INSERT INTO metrics (user_id, action) VALUES ($1, $2)',
+                    [req.session.user.id, 'start_download']
+                );
             }
 
             // Iniciar descargas en secuencia
@@ -202,12 +186,18 @@ const omieController = {
                 total: availableFiles.length
             });
         } catch (error) {
-            res.status(500).json({ error: 'Error en el proceso de descarga' });
+            console.error('Error en startDownload:', error);
+            res.status(500).json({ 
+                error: 'Error en el proceso de descarga',
+                message: error.message 
+            });
         }
     },
 
     agregarPreciosExcel: async function() {
         try {
+            ensureDirectoriesExist();
+            
             // Verificar que el directorio existe
             if (!fs.existsSync(EXCEL_DIR)) {
                 throw new Error('El directorio de archivos Excel no existe');
@@ -218,7 +208,7 @@ const omieController = {
                 .filter(file => file.endsWith('.xlsx'))
                 .sort();
 
-            // Estructura para almacenar los datos en el formato requerido
+            // Estructura para almacenar los datos
             const datos = [];
 
             // Procesar cada archivo
@@ -234,7 +224,6 @@ const omieController = {
                 const mes = fecha.format('MM');
                 const dia = fecha.format('DD');
 
-                // Procesar cada fila, ignorando la columna "Precio PT MWh"
                 fileDatos.forEach(row => {
                     const hora = row.Hora?.toString() || '';
                     const precioES = row['Precio ES MWh'];
@@ -251,7 +240,7 @@ const omieController = {
                 });
             }
 
-            // Ordenar los datos por fecha y hora
+            // Ordenar los datos
             datos.sort((a, b) => {
                 const fechaA = `${a.Ano}${a.Mes}${a.Dia}${a.Hora.padStart(2, '0')}`;
                 const fechaB = `${b.Ano}${b.Mes}${b.Dia}${b.Hora.padStart(2, '0')}`;
