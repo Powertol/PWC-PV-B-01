@@ -5,10 +5,8 @@ const authController = {
     login: async (req, res) => {
         const { username, password } = req.body;
         
-        db.get('SELECT * FROM users WHERE username = ?', [username], async (err, user) => {
-            if (err) {
-                return res.status(500).json({ error: 'Error de servidor' });
-            }
+        try {
+            const user = await db.oneOrNone('SELECT * FROM users WHERE username = $1', [username]);
             
             if (!user) {
                 return res.status(401).json({ error: 'Usuario no encontrado' });
@@ -20,50 +18,52 @@ const authController = {
             }
 
             // Registrar sesión
-            db.run('INSERT INTO sessions (user_id) VALUES (?)', [user.id], function(err) {
-                if (err) {
-                    console.error('Error al registrar sesión:', err);
-                } else {
-                    // Guardar el ID de la sesión en la sesión del usuario
-                    const sessionId = this.lastID;
-                    
-                    // Registrar métrica de login
-                    db.run('INSERT INTO metrics (user_id, action) VALUES (?, ?)',
-                        [user.id, 'login']);
-
-                    req.session.user = {
-                        id: user.id,
-                        username: user.username,
-                        role: user.role,
-                        sessionId: sessionId
-                    };
-
-                    res.json({ success: true, redirect: '/dashboard' });
-                }
-            });
-        });
-    },
-
-    logout: (req, res) => {
-        if (req.session.user) {
-            // Actualizar el registro de sesión
-            const endTime = new Date().toISOString();
-            db.run(`
-                UPDATE sessions
-                SET end_time = ?,
-                    duration = ROUND((JULIANDAY(?) - JULIANDAY(start_time)) * 86400)
-                WHERE id = ?`,
-                [endTime, endTime, req.session.user.sessionId],
-                (err) => {
-                    if (err) {
-                        console.error('Error al actualizar sesión:', err);
-                    }
-                }
+            const result = await db.one(
+                'INSERT INTO sessions (user_id) VALUES ($1) RETURNING id',
+                [user.id]
             );
 
-            // Registrar métrica de logout
-            db.run('INSERT INTO metrics (user_id, action) VALUES (?, ?)',
-                [req.session.user.id, 'logout']);
+            // Registrar métrica de login
+            await db.none(
+                'INSERT INTO metrics (user_id, action) VALUES ($1, $2)',
+                [user.id, 'login']
+            );
+
+            req.session.user = {
+                id: user.id,
+                username: user.username,
+                role: user.role,
+                sessionId: result.id
+            };
+
+            res.json({ success: true, redirect: '/dashboard' });
+        } catch (error) {
+            console.error('Error en login:', error);
+            res.status(500).json({ error: 'Error de servidor' });
+        }
+    },
+
+    logout: async (req, res) => {
+        if (req.session.user) {
+            try {
+                const endTime = new Date().toISOString();
+                // Actualizar el registro de sesión
+                await db.none(`
+                    UPDATE sessions
+                    SET end_time = $1,
+                        duration = EXTRACT(EPOCH FROM ($1::timestamp - start_time))
+                    WHERE id = $2`,
+                    [endTime, req.session.user.sessionId]
+                );
+
+                // Registrar métrica de logout
+                await db.none(
+                    'INSERT INTO metrics (user_id, action) VALUES ($1, $2)',
+                    [req.session.user.id, 'logout']
+                );
+            } catch (error) {
+                console.error('Error en logout:', error);
+            }
         }
         
         req.session.destroy();
@@ -80,93 +80,91 @@ const authController = {
         try {
             const hashedPassword = await bcrypt.hash(password, 10);
             
-            db.run('INSERT INTO users (username, password, role) VALUES (?, ?, ?)',
-                [username, hashedPassword, role],
-                function(err) {
-                    if (err) {
-                        if (err.message.includes('UNIQUE constraint failed')) {
-                            return res.status(400).json({ error: 'El usuario ya existe' });
-                        }
-                        return res.status(500).json({ error: 'Error al crear usuario' });
-                    }
-
-                    // Registrar métrica de creación de usuario
-                    db.run('INSERT INTO metrics (user_id, action) VALUES (?, ?)', 
-                        [req.session.user.id, `created_user:${username}`]);
-
-                    res.json({ 
-                        success: true, 
-                        message: 'Usuario creado exitosamente',
-                        userId: this.lastID 
-                    });
-                }
+            const result = await db.one(
+                'INSERT INTO users (username, password, role) VALUES ($1, $2, $3) RETURNING id',
+                [username, hashedPassword, role]
             );
+
+            // Registrar métrica de creación de usuario
+            await db.none(
+                'INSERT INTO metrics (user_id, action) VALUES ($1, $2)',
+                [req.session.user.id, `created_user:${username}`]
+            );
+
+            res.json({
+                success: true,
+                message: 'Usuario creado exitosamente',
+                userId: result.id
+            });
         } catch (error) {
+            if (error.constraint === 'users_username_key') {
+                return res.status(400).json({ error: 'El usuario ya existe' });
+            }
             res.status(500).json({ error: 'Error al crear usuario' });
         }
     },
 
-    getUserSessions: (req, res) => {
+    getUserSessions: async (req, res) => {
         if (req.session.user?.role !== 'admin') {
             return res.status(403).json({ error: 'Acceso denegado' });
         }
 
-        db.all(`
-            SELECT
-                s.id,
-                u.username,
-                s.start_time,
-                s.end_time,
-                s.duration,
-                CASE
-                    WHEN s.end_time IS NULL THEN 'Activa'
-                    ELSE 'Finalizada'
-                END as status
-            FROM sessions s
-            JOIN users u ON s.user_id = u.id
-            ORDER BY s.start_time DESC
-        `, (err, sessions) => {
-            if (err) {
-                return res.status(500).json({ error: 'Error al obtener sesiones' });
-            }
+        try {
+            const sessions = await db.any(`
+                SELECT
+                    s.id,
+                    u.username,
+                    s.start_time,
+                    s.end_time,
+                    s.duration,
+                    CASE
+                        WHEN s.end_time IS NULL THEN 'Activa'
+                        ELSE 'Finalizada'
+                    END as status
+                FROM sessions s
+                JOIN users u ON s.user_id = u.id
+                ORDER BY s.start_time DESC
+            `);
             res.json(sessions);
-        });
+        } catch (error) {
+            res.status(500).json({ error: 'Error al obtener sesiones' });
+        }
     },
 
-    getMetrics: (req, res) => {
+    getMetrics: async (req, res) => {
         if (req.session.user?.role !== 'admin') {
             return res.status(403).json({ error: 'Acceso denegado' });
         }
 
-        db.all(`
-            SELECT 
-                m.action,
-                m.timestamp,
-                u.username,
-                COUNT(*) as count
-            FROM metrics m
-            JOIN users u ON m.user_id = u.id
-            GROUP BY m.action, u.username
-            ORDER BY m.timestamp DESC
-        `, (err, metrics) => {
-            if (err) {
-                return res.status(500).json({ error: 'Error al obtener métricas' });
-            }
+        try {
+            const metrics = await db.any(`
+                SELECT 
+                    m.action,
+                    m.timestamp,
+                    u.username,
+                    COUNT(*) as count
+                FROM metrics m
+                JOIN users u ON m.user_id = u.id
+                GROUP BY m.action, u.username, m.timestamp
+                ORDER BY m.timestamp DESC
+            `);
             res.json(metrics);
-        });
+        } catch (error) {
+            res.status(500).json({ error: 'Error al obtener métricas' });
+        }
     },
 
-    getUsers: (req, res) => {
+    getUsers: async (req, res) => {
         if (req.session.user?.role !== 'admin') {
             return res.status(403).json({ error: 'Acceso denegado' });
         }
 
-        db.all('SELECT id, username, role FROM users', (err, users) => {
-            if (err) {
-                return res.status(500).json({ error: 'Error al obtener usuarios' });
-            }
+        try {
+            const users = await db.any('SELECT id, username, role FROM users');
             res.json(users);
-        });
+        } catch (error) {
+            res.status(500).json({ error: 'Error al obtener usuarios' });
+        }
     },
 
     updateUser: async (req, res) => {
@@ -177,77 +175,71 @@ const authController = {
         const { id, username, password, role } = req.body;
 
         try {
-            // Si se proporciona una nueva contraseña, hashearla
-            let updateQuery = 'UPDATE users SET username = ?, role = ?';
+            let updateQuery = 'UPDATE users SET username = $1, role = $2';
             let params = [username, role];
 
             if (password) {
                 const hashedPassword = await bcrypt.hash(password, 10);
-                updateQuery += ', password = ?';
+                updateQuery += ', password = $3';
                 params.push(hashedPassword);
             }
 
-            updateQuery += ' WHERE id = ?';
+            updateQuery += ' WHERE id = $' + (params.length + 1);
             params.push(id);
 
-            db.run(updateQuery, params, function(err) {
-                if (err) {
-                    if (err.message.includes('UNIQUE constraint failed')) {
-                        return res.status(400).json({ error: 'El nombre de usuario ya existe' });
-                    }
-                    return res.status(500).json({ error: 'Error al actualizar usuario' });
-                }
+            await db.none(updateQuery, params);
 
-                // Registrar métrica de actualización
-                db.run('INSERT INTO metrics (user_id, action) VALUES (?, ?)',
-                    [req.session.user.id, `updated_user:${username}`]);
+            // Registrar métrica de actualización
+            await db.none(
+                'INSERT INTO metrics (user_id, action) VALUES ($1, $2)',
+                [req.session.user.id, `updated_user:${username}`]
+            );
 
-                res.json({
-                    success: true,
-                    message: 'Usuario actualizado exitosamente'
-                });
+            res.json({
+                success: true,
+                message: 'Usuario actualizado exitosamente'
             });
         } catch (error) {
+            if (error.constraint === 'users_username_key') {
+                return res.status(400).json({ error: 'El nombre de usuario ya existe' });
+            }
             res.status(500).json({ error: 'Error al actualizar usuario' });
         }
     },
 
-    deleteUser: (req, res) => {
+    deleteUser: async (req, res) => {
         if (req.session.user?.role !== 'admin') {
             return res.status(403).json({ error: 'Acceso denegado' });
         }
 
         const { id } = req.params;
 
-        // No permitir eliminar al propio usuario administrador
         if (parseInt(id) === req.session.user.id) {
             return res.status(400).json({ error: 'No puedes eliminar tu propio usuario' });
         }
 
-        db.get('SELECT username FROM users WHERE id = ?', [id], (err, user) => {
-            if (err) {
-                return res.status(500).json({ error: 'Error al buscar usuario' });
-            }
+        try {
+            const user = await db.oneOrNone('SELECT username FROM users WHERE id = $1', [id]);
 
             if (!user) {
                 return res.status(404).json({ error: 'Usuario no encontrado' });
             }
 
-            db.run('DELETE FROM users WHERE id = ?', [id], function(err) {
-                if (err) {
-                    return res.status(500).json({ error: 'Error al eliminar usuario' });
-                }
+            await db.none('DELETE FROM users WHERE id = $1', [id]);
 
-                // Registrar métrica de eliminación
-                db.run('INSERT INTO metrics (user_id, action) VALUES (?, ?)',
-                    [req.session.user.id, `deleted_user:${user.username}`]);
+            // Registrar métrica de eliminación
+            await db.none(
+                'INSERT INTO metrics (user_id, action) VALUES ($1, $2)',
+                [req.session.user.id, `deleted_user:${user.username}`]
+            );
 
-                res.json({
-                    success: true,
-                    message: 'Usuario eliminado exitosamente'
-                });
+            res.json({
+                success: true,
+                message: 'Usuario eliminado exitosamente'
             });
-        });
+        } catch (error) {
+            res.status(500).json({ error: 'Error al eliminar usuario' });
+        }
     }
 };
 
